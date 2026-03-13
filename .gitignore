@@ -9,3 +9,5 @@ data/
 .settings/
 .classpath
 .project
+.vercel
+.env*.local

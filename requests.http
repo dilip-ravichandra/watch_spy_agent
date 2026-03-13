@@ -1,0 +1,74 @@
+### Health
+GET http://localhost:3000/api/health
+
+### Track morning habit
+POST http://localhost:3000/api/habits/track
+Content-Type: application/json
+
+{
+  "userId": "alex",
+  "timestamp": "2026-03-13T08:00:00+05:30",
+  "location": "home",
+  "destination": "office",
+  "action": "leave for work",
+  "notes": "weekday commute",
+  "source": "watch"
+}
+
+### Register watch hook
+POST http://localhost:3000/api/devices/register
+Content-Type: application/json
+
+{
+  "userId": "alex",
+  "deviceType": "watch",
+  "platform": "wearos",
+  "hookUrl": "https://example.com/watch-hook",
+  "pushToken": "watch-token-001",
+  "enabled": true
+}
+
+### Register mobile hook
+POST http://localhost:3000/api/devices/register
+Content-Type: application/json
+
+{
+  "userId": "alex",
+  "deviceType": "mobile",
+  "platform": "android",
+  "hookUrl": "https://example.com/mobile-hook",
+  "pushToken": "mobile-token-001",
+  "enabled": true
+}
+
+### Get reminder
+GET http://localhost:3000/api/reminders?userId=alex&timestamp=2026-03-13T08:10:00%2B05:30&currentLocation=home
+
+### Chat
+POST http://localhost:3000/api/chat
+Content-Type: application/json
+
+{
+  "userId": "alex",
+  "timestamp": "2026-03-13T08:10:00+05:30",
+  "currentLocation": "home",
+  "message": "What should I do now?"
+}
+
+### Pending notifications for watch
+GET http://localhost:3000/api/notifications/pending?userId=alex&deviceType=watch
+
+### Acknowledge notification
+POST http://localhost:3000/api/notifications/ack
+Content-Type: application/json
+
+{
+  "notificationId": 1,
+  "userId": "alex",
+  "status": "ACKNOWLEDGED",
+  "responseOption": "remind_now"
+}
+
+### Manually run reminder cron (optional local test)
+GET http://localhost:3000/api/cron/dispatch-reminders
+Authorization: Bearer {{CRON_SECRET}}

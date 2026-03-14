@@ -1,24 +1,37 @@
-const { sql, ensureSchema } = require('./_lib/db');
-const { json, buildSuggestion, userIdFrom } = require('./_lib/utils');
+const { getDb, ensureSchema } = require('./_lib/db');
+const { json, buildSuggestion } = require('./_lib/utils');
+const { requireAuthenticatedUser } = require('./_lib/auth-guard');
 
 module.exports = async (req, res) => {
   if (req.method !== 'GET') return json(res, 405, { error: 'Method not allowed' });
 
-  await ensureSchema();
+  const authUser = await requireAuthenticatedUser(req, res, json);
+  if (!authUser) return;
 
-  const userId = userIdFrom(req, {});
+  await ensureSchema();
+  const db = await getDb();
+  if (!db) return json(res, 500, { error: 'MongoDB is not configured' });
+
+  const userId = authUser.userId;
   const requestTimestamp = String(req.query.timestamp || new Date().toISOString());
   const currentLocation = String(req.query.currentLocation || 'unknown');
 
-  const rows = await sql`
-    SELECT timestamp_iso, location, destination, action, source
-    FROM habit_events
-    WHERE user_id = ${userId}
-    ORDER BY id DESC
-    LIMIT 500
-  `;
+  const rows = await db
+    .collection('events')
+    .find({ userId })
+    .sort({ _id: -1 })
+    .limit(500)
+    .toArray();
 
-  const suggestion = buildSuggestion(rows.rows, requestTimestamp, currentLocation);
+  const normalized = rows.map((r) => ({
+    timestamp_iso: r.timestampIso || r.timestamp || r.timestamp_iso,
+    location: r.location,
+    destination: r.destination,
+    action: r.action,
+    source: r.source
+  }));
+
+  const suggestion = buildSuggestion(normalized, requestTimestamp, currentLocation);
 
   return json(res, 200, {
     userId,

@@ -1,8 +1,32 @@
 ### Health
 GET http://localhost:3000/api/health
 
-### Track morning habit
-POST http://localhost:3000/api/habits/track
+### Signup
+POST http://localhost:3000/api/auth/signup
+Content-Type: application/json
+
+{
+  "userId": "alex",
+  "fullName": "Alex Mercer",
+  "email": "alex@example.com",
+  "password": "Secret123!"
+}
+
+### Login
+POST http://localhost:3000/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "alex@example.com",
+  "password": "Secret123!"
+}
+
+### Session check (paste your token)
+GET http://localhost:3000/api/auth/me
+Authorization: Bearer REPLACE_WITH_TOKEN
+
+### Track event (new)
+POST http://localhost:3000/api/track
 Content-Type: application/json
 
 {
@@ -11,38 +35,26 @@ Content-Type: application/json
   "location": "home",
   "destination": "office",
   "action": "leave for work",
-  "notes": "weekday commute",
-  "source": "watch"
+  "note": "weekday commute"
 }
 
-### Register watch hook
-POST http://localhost:3000/api/devices/register
+### Track event (compat route)
+POST http://localhost:3000/api/habits/track
 Content-Type: application/json
 
 {
   "userId": "alex",
-  "deviceType": "watch",
-  "platform": "wearos",
-  "hookUrl": "https://example.com/watch-hook",
-  "pushToken": "watch-token-001",
-  "enabled": true
+  "timestamp": "2026-03-13T08:05:00+05:30",
+  "location": "home",
+  "destination": "office",
+  "action": "leave for work"
 }
 
-### Register mobile hook
-POST http://localhost:3000/api/devices/register
-Content-Type: application/json
+### Get reminder (new)
+GET http://localhost:3000/api/reminder?userId=alex&currentLocation=home
 
-{
-  "userId": "alex",
-  "deviceType": "mobile",
-  "platform": "android",
-  "hookUrl": "https://example.com/mobile-hook",
-  "pushToken": "mobile-token-001",
-  "enabled": true
-}
-
-### Get reminder
-GET http://localhost:3000/api/reminders?userId=alex&timestamp=2026-03-13T08:10:00%2B05:30&currentLocation=home
+### Get reminder (compat route)
+GET http://localhost:3000/api/reminders?userId=alex&currentLocation=home
 
 ### Chat
 POST http://localhost:3000/api/chat
@@ -55,20 +67,40 @@ Content-Type: application/json
   "message": "What should I do now?"
 }
 
-### Pending notifications for watch
-GET http://localhost:3000/api/notifications/pending?userId=alex&deviceType=watch
+### Assistant check-in question
+GET http://localhost:3000/api/assistant/question
 
-### Acknowledge notification
-POST http://localhost:3000/api/notifications/ack
+### Assistant check-in answer
+POST http://localhost:3000/api/assistant/answer
 Content-Type: application/json
 
 {
-  "notificationId": 1,
-  "userId": "alex",
-  "status": "ACKNOWLEDGED",
-  "responseOption": "remind_now"
+  "slotKey": "2026-03-13:08",
+  "questionId": "q_location_now",
+  "questionText": "Where are you right now?",
+  "selectedOption": "Home",
+  "answer": "Home"
 }
 
-### Manually run reminder cron (optional local test)
-GET http://localhost:3000/api/cron/dispatch-reminders
-Authorization: Bearer {{CRON_SECRET}}
+### Location update
+POST http://localhost:3000/api/location/update
+Content-Type: application/json
+
+{
+  "latitude": 12.9716,
+  "longitude": 77.5946,
+  "source": "manual",
+  "label": "Office"
+}
+
+### Frequent places
+GET http://localhost:3000/api/location/frequent-places?minVisits=3
+
+### Daily insight
+GET http://localhost:3000/api/assistant/daily-insight
+
+### Calendar upcoming (via MuleSoft)
+GET http://localhost:3000/api/integrations/calendar/upcoming?limit=5
+
+### Weather (via MuleSoft)
+GET http://localhost:3000/api/integrations/weather/current?location=Bengaluru

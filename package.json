@@ -2,16 +2,17 @@
   "name": "watch-kind-assistant-vercel",
   "version": "1.0.0",
   "private": true,
-  "description": "Vercel serverless API for kind watch assistant",
-  "main": "index.js",
+  "description": "Small watch assistant with simple frontend and serverless APIs",
+  "main": "local-server.js",
   "scripts": {
-    "dev": "vercel dev",
-    "start": "vercel dev"
+    "dev": "node local-server.js",
+    "start": "node local-server.js"
   },
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
-    "@vercel/postgres": "^0.10.0"
+    "mongodb": "^6.8.0",
+    "nodemailer": "^8.0.2"
   }
 }

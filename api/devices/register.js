@@ -1,13 +1,19 @@
-const { sql, ensureSchema } = require('../_lib/db');
-const { json, parseBody, userIdFrom, nowIso } = require('../_lib/utils');
+const { getDb, ensureSchema } = require('../_lib/db');
+const { json, parseBody, nowIso } = require('../_lib/utils');
+const { requireAuthenticatedUser } = require('../_lib/auth-guard');
 
 module.exports = async (req, res) => {
   if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed' });
 
+  const authUser = await requireAuthenticatedUser(req, res, json);
+  if (!authUser) return;
+
   await ensureSchema();
+  const db = await getDb();
+  if (!db) return json(res, 500, { error: 'MongoDB is not configured' });
 
   const body = parseBody(req);
-  const userId = userIdFrom(req, body);
+  const userId = authUser.userId;
   const deviceType = String(body.deviceType || 'mobile');
   const platform = String(body.platform || 'generic');
   const hookUrl = String(body.hookUrl || '');
@@ -15,16 +21,21 @@ module.exports = async (req, res) => {
   const enabled = body.enabled !== false;
   const now = nowIso();
 
-  await sql`
-    INSERT INTO device_hooks (user_id, device_type, platform, hook_url, push_token, enabled, created_at, updated_at)
-    VALUES (${userId}, ${deviceType}, ${platform}, ${hookUrl}, ${pushToken}, ${enabled}, ${now}, ${now})
-    ON CONFLICT (user_id, device_type, platform)
-    DO UPDATE SET
-      hook_url = EXCLUDED.hook_url,
-      push_token = EXCLUDED.push_token,
-      enabled = EXCLUDED.enabled,
-      updated_at = EXCLUDED.updated_at
-  `;
+  await db.collection('device_hooks').updateOne(
+    { userId, deviceType, platform },
+    {
+      $set: {
+        hookUrl,
+        pushToken,
+        enabled,
+        updatedAt: now
+      },
+      $setOnInsert: {
+        createdAt: now
+      }
+    },
+    { upsert: true }
+  );
 
   return json(res, 200, {
     success: true,

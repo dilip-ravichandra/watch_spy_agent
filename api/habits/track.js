@@ -1,17 +1,24 @@
-const { sql, ensureSchema } = require('../_lib/db');
-const { json, nowIso, parseBody, userIdFrom, safeHour } = require('../_lib/utils');
+const { getDb, ensureSchema } = require('../_lib/db');
+const { json, nowIso, parseBody, safeHour } = require('../_lib/utils');
+const { requireAuthenticatedUser } = require('../_lib/auth-guard');
 
 module.exports = async (req, res) => {
   if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed' });
 
+  const authUser = await requireAuthenticatedUser(req, res, json);
+  if (!authUser) return;
+
   await ensureSchema();
+  const db = await getDb();
+  if (!db) return json(res, 500, { error: 'MongoDB is not configured' });
 
   const body = parseBody(req);
-  const userId = userIdFrom(req, body);
+  const userId = authUser.userId;
   const timestampIso = String(body.timestamp || nowIso());
 
   const event = {
     userId,
+    timestamp: timestampIso,
     timestampIso,
     hourOfDay: safeHour(timestampIso),
     location: String(body.location || 'unknown'),
@@ -22,26 +29,21 @@ module.exports = async (req, res) => {
     createdAt: nowIso()
   };
 
-  await sql`
-    INSERT INTO habit_events (user_id, timestamp_iso, hour_of_day, location, destination, action, notes, source, created_at)
-    VALUES (${event.userId}, ${event.timestampIso}, ${event.hourOfDay}, ${event.location}, ${event.destination}, ${event.action}, ${event.notes}, ${event.source}, ${event.createdAt})
-  `;
+  await db.collection('events').insertOne(event);
 
-  const favorite = await sql`
-    SELECT action, COUNT(*)::int AS action_count
-    FROM habit_events
-    WHERE user_id = ${event.userId}
-    GROUP BY action
-    ORDER BY COUNT(*) DESC
-    LIMIT 1
-  `;
+  const favorite = await db.collection('events').aggregate([
+    { $match: { userId: event.userId } },
+    { $group: { _id: '$action', action_count: { $sum: 1 } } },
+    { $sort: { action_count: -1 } },
+    { $limit: 1 }
+  ]).toArray();
 
   return json(res, 200, {
     success: true,
     userId: event.userId,
     trackedAt: event.timestampIso,
-    storedIn: 'postgres',
-    learnedFavoriteAction: favorite.rows[0]?.action || event.action,
+    storedIn: 'mongodb',
+    learnedFavoriteAction: favorite[0]?._id || event.action,
     message: 'Thank you. I saved this routine in persistent storage and will use it for kinder reminders.'
   });
 };

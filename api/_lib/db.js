@@ -1,79 +1,57 @@
-const { sql } = require('@vercel/postgres');
+const { MongoClient } = require('mongodb');
 
 let schemaReady = false;
+let cachedClient = null;
+let cachedDb = null;
+
+async function getDb() {
+  const uri = String(process.env.MONGODB_URI || '').trim();
+  if (!uri) return null;
+
+  if (!cachedDb) {
+    cachedClient = new MongoClient(uri);
+    await cachedClient.connect();
+    cachedDb = cachedClient.db(process.env.MONGODB_DB || 'watch_spy_agent');
+  }
+
+  return cachedDb;
+}
 
 async function ensureSchema() {
   if (schemaReady) return;
 
-  await sql`
-    CREATE TABLE IF NOT EXISTS habit_events (
-      id BIGSERIAL PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      timestamp_iso TEXT NOT NULL,
-      hour_of_day INT NOT NULL,
-      location TEXT,
-      destination TEXT,
-      action TEXT,
-      notes TEXT,
-      source TEXT,
-      created_at TEXT NOT NULL
-    );
-  `;
+  const db = await getDb();
+  if (!db) {
+    schemaReady = true;
+    return;
+  }
 
-  await sql`CREATE INDEX IF NOT EXISTS idx_habit_events_user_hour ON habit_events (user_id, hour_of_day);`;
+  await db.collection('events').createIndexes([
+    { key: { userId: 1, hourOfDay: 1, createdAt: -1 }, name: 'idx_events_user_hour_created' }
+  ]);
 
-  await sql`
-    CREATE TABLE IF NOT EXISTS chat_history (
-      id BIGSERIAL PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      message_role TEXT NOT NULL,
-      message_text TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-  `;
+  await db.collection('chats').createIndexes([
+    { key: { userId: 1, createdAt: -1 }, name: 'idx_chats_user_created' }
+  ]);
 
-  await sql`CREATE INDEX IF NOT EXISTS idx_chat_history_user ON chat_history (user_id, id);`;
+  await db.collection('device_hooks').createIndexes([
+    { key: { userId: 1, deviceType: 1, platform: 1 }, unique: true, name: 'uniq_device_hooks_user_type_platform' },
+    { key: { userId: 1, enabled: 1 }, name: 'idx_device_hooks_user_enabled' }
+  ]);
 
-  await sql`
-    CREATE TABLE IF NOT EXISTS device_hooks (
-      id BIGSERIAL PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      device_type TEXT NOT NULL,
-      platform TEXT NOT NULL,
-      hook_url TEXT,
-      push_token TEXT,
-      enabled BOOLEAN DEFAULT TRUE,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      UNIQUE (user_id, device_type, platform)
-    );
-  `;
+  await db.collection('notification_queue').createIndexes([
+    { key: { userId: 1, status: 1, deviceType: 1 }, name: 'idx_notification_user_status_device' },
+    { key: { userId: 1, reminderSlot: 1, deviceType: 1 }, name: 'idx_notification_slot' },
+    { key: { createdAt: -1 }, name: 'idx_notification_created' }
+  ]);
 
-  await sql`CREATE INDEX IF NOT EXISTS idx_device_hooks_user ON device_hooks (user_id, enabled);`;
-
-  await sql`
-    CREATE TABLE IF NOT EXISTS notification_queue (
-      id BIGSERIAL PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      device_type TEXT NOT NULL,
-      channel TEXT NOT NULL,
-      reminder_slot TEXT NOT NULL,
-      scheduled_time TEXT NOT NULL,
-      suggested_action TEXT,
-      suggested_destination TEXT,
-      reminder_message TEXT,
-      delivery_payload TEXT,
-      status TEXT NOT NULL,
-      response_option TEXT,
-      created_at TEXT NOT NULL,
-      sent_at TEXT
-    );
-  `;
-
-  await sql`CREATE INDEX IF NOT EXISTS idx_notification_queue_user_status ON notification_queue (user_id, status, device_type);`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_notification_queue_slot ON notification_queue (user_id, reminder_slot, device_type);`;
+  await db.collection('calendar_events').createIndexes([
+    { key: { userId: 1, startTime: 1 }, name: 'idx_calendar_user_start' },
+    { key: { userId: 1, dateKey: 1 }, name: 'idx_calendar_user_date' },
+    { key: { userId: 1, updatedAt: -1 }, name: 'idx_calendar_user_updated' }
+  ]);
 
   schemaReady = true;
 }
 
-module.exports = { sql, ensureSchema };
+module.exports = { getDb, ensureSchema };

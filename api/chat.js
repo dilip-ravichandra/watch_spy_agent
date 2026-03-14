@@ -1,31 +1,99 @@
-const { sql, ensureSchema } = require('./_lib/db');
-const { json, parseBody, userIdFrom, buildSuggestion, nowIso } = require('./_lib/utils');
+const { parseBody, send } = require('./_lib/http');
+const { requireAuthenticatedUser } = require('./_lib/auth-guard');
+const { getDueAssistantQuestion, addActivityLog } = require('./_lib/assistant-store');
+const {
+  getEventsByUser,
+  getRecentChats,
+  saveChat,
+  buildSuggestion,
+  nowIso
+} = require('./_lib/store');
 
-async function generateAiReply({ userMessage, suggestion, history }) {
-  const aiEnabled = String(process.env.AI_ENABLED || 'false') === 'true';
+function rankTop(items, key, fallback = 'unknown') {
+  const map = new Map();
+  for (const item of items || []) {
+    const value = String(item?.[key] || fallback);
+    map.set(value, (map.get(value) || 0) + 1);
+  }
+  const sorted = [...map.entries()].sort((a, b) => b[1] - a[1]);
+  return {
+    value: sorted[0]?.[0] || fallback,
+    count: sorted[0]?.[1] || 0,
+    total: items?.length || 0
+  };
+}
+
+function detectTone(message) {
+  const m = String(message || '').toLowerCase();
+  if (/late|missed|running\s+behind/.test(m)) return 'late';
+  if (/tired|exhausted|drained|sleepy/.test(m)) return 'tired';
+  if (/stress|anxious|overwhelm|panic/.test(m)) return 'stressed';
+  if (/motivat|lazy|unfocus|procrastinat/.test(m)) return 'motivation';
+  if (/where|go/.test(m)) return 'where';
+  return 'neutral';
+}
+
+function buildLocalCoaching(message, suggestion, events, currentLocation) {
+  const tone = detectTone(message);
+  const byAction = rankTop(events, 'action', 'check plan');
+  const byDestination = rankTop(events, 'destination', currentLocation || 'unknown');
+  const confidence = byAction.total > 0 ? Math.round((byAction.count / byAction.total) * 100) : 0;
+
+  let opener = 'You are doing well. Let us take one small step.';
+  if (tone === 'late') opener = 'It is okay to be late sometimes. Let us recover calmly.';
+  if (tone === 'tired') opener = 'Thanks for sharing. We can keep this very light right now.';
+  if (tone === 'stressed') opener = 'Take one deep breath. We can simplify this moment together.';
+  if (tone === 'motivation') opener = 'Tiny progress still counts. Let us pick the easiest next action.';
+
+  const destinationLine =
+    suggestion.suggestedDestination !== 'unknown' && suggestion.suggestedDestination !== currentLocation
+      ? `Your likely destination is ${suggestion.suggestedDestination}.`
+      : 'Stay where you are and begin with one small prep step.';
+
+  const plan = [
+    `1) Next best action: ${suggestion.suggestedAction}.`,
+    `2) ${destinationLine}`,
+    '3) Set a 10-minute check-in and I will adapt from your next update.'
+  ].join(' ');
+
+  return {
+    reply: `${opener} ${plan}`,
+    confidence,
+    quickOptions: [
+      { label: 'Start 10-min focus', value: 'focus_10' },
+      { label: 'Remind me in 15 min', value: 'remind_15' },
+      { label: 'Give gentler plan', value: 'gentle_plan' },
+      { label: `Navigate to ${suggestion.suggestedDestination}`, value: 'navigate' }
+    ],
+    followUpQuestion: 'Which option should I do for you now?'
+  };
+}
+
+async function groqReply(userMessage, suggestion, chats) {
+  const enabled = String(process.env.AI_ENABLED || 'false') === 'true';
   const key = process.env.GROQ_API_KEY || '';
-  if (!aiEnabled || !key) return null;
+  if (!enabled || !key) return null;
 
   const model = process.env.GROQ_MODEL || 'llama-3.1-8b-instant';
   const url = process.env.GROQ_API_URL || 'https://api.groq.com/openai/v1/chat/completions';
 
-  const recent = (history || []).slice(-10).map((h) => ({
-    role: h.message_role === 'assistant' ? 'assistant' : 'user',
-    content: h.message_text
+  const recent = (chats || []).slice(-8).map((c) => ({
+    role: c.role === 'assistant' ? 'assistant' : 'user',
+    content: c.message
   }));
 
   const body = {
     model,
-    temperature: 0.7,
+    temperature: 0.4,
     messages: [
       {
         role: 'system',
         content:
-          'You are a kind smartwatch habit assistant. Be warm, brief, practical, and supportive.'
+          'You are an emotionally intelligent smartwatch assistant. Respond in 3-5 short sentences. Be warm, practical, and specific. Include one actionable next step and one fallback option.'
       },
       {
         role: 'system',
-        content: `Learned habit now: action=${suggestion.suggestedAction}, destination=${suggestion.suggestedDestination}, basedOnEvents=${suggestion.learnedFromEvents}`
+        content: `Behavior profile: preferred_action=${suggestion.suggestedAction}, likely_destination=${suggestion.suggestedDestination}, events_seen=${suggestion.learnedFromEvents}`
       },
       ...recent,
       { role: 'user', content: userMessage }
@@ -47,84 +115,55 @@ async function generateAiReply({ userMessage, suggestion, history }) {
 }
 
 module.exports = async (req, res) => {
-  if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed' });
+  if (req.method !== 'POST') return send(res, 405, { error: 'Method not allowed' });
 
-  await ensureSchema();
+  const authUser = await requireAuthenticatedUser(req, res, send);
+  if (!authUser) return;
 
   const body = parseBody(req);
-  const userId = userIdFrom(req, body);
-  const userMessage = String(body.message || '');
+  const uid = authUser.userId;
+  const message = String(body.message || '');
   const timestamp = String(body.timestamp || nowIso());
   const currentLocation = String(body.currentLocation || 'unknown');
 
-  const [events, chats] = await Promise.all([
-    sql`
-      SELECT timestamp_iso, location, destination, action, source
-      FROM habit_events
-      WHERE user_id = ${userId}
-      ORDER BY id DESC
-      LIMIT 500
-    `,
-    sql`
-      SELECT message_role, message_text, created_at
-      FROM chat_history
-      WHERE user_id = ${userId}
-      ORDER BY id DESC
-      LIMIT 10
-    `
-  ]);
+  const [events, chats] = await Promise.all([getEventsByUser(uid, 500), getRecentChats(uid, 10)]);
+  const suggestion = buildSuggestion(events, timestamp, currentLocation);
+  const local = buildLocalCoaching(message, suggestion, events, currentLocation);
+  const checkIn = await getDueAssistantQuestion(uid, new Date());
 
-  const suggestion = buildSuggestion(events.rows, timestamp, currentLocation);
+  await saveChat(uid, 'user', message);
+  await addActivityLog({ userId: uid, type: 'chat.user', detail: { messageLength: message.length } });
 
-  const lowered = userMessage.toLowerCase();
-  let localReply = 'I am here for you, and I will keep learning what helps most.';
-  if (lowered.includes('late')) localReply = 'That is okay. Let us focus on the next best step together.';
-  else if (lowered.includes('tired')) localReply = 'You are doing your best. I can keep this gentle for you.';
-  else if (lowered.includes('where')) localReply = 'I can help with that kindly.';
-  else if (lowered.includes('what should i do')) localReply = 'I have a small suggestion for this hour.';
-
-  localReply += ` You usually ${suggestion.suggestedAction} around this time.`;
-  if (suggestion.suggestedDestination !== 'unknown' && suggestion.suggestedDestination !== currentLocation) {
-    localReply += ` Around this time you often go to ${suggestion.suggestedDestination}.`;
-  }
-
-  await sql`
-    INSERT INTO chat_history (user_id, message_role, message_text, created_at)
-    VALUES (${userId}, 'user', ${userMessage}, ${nowIso()})
-  `;
-
-  let reply = localReply;
+  let reply = local.reply;
   try {
-    const aiReply = await generateAiReply({
-      userMessage,
-      suggestion,
-      history: chats.rows
-    });
-    if (aiReply) reply = aiReply;
+    const fromGroq = await groqReply(message, suggestion, chats);
+    if (fromGroq) reply = fromGroq;
   } catch {
-    // fall back silently
+    // fallback only
   }
 
-  await sql`
-    INSERT INTO chat_history (user_id, message_role, message_text, created_at)
-    VALUES (${userId}, 'assistant', ${reply}, ${nowIso()})
-  `;
+  await saveChat(uid, 'assistant', reply);
+  await addActivityLog({ userId: uid, type: 'chat.assistant', detail: { aiMode: String(process.env.AI_ENABLED || 'false') === 'true' && process.env.GROQ_API_KEY ? 'groq' : 'local-fallback' } });
 
-  return json(res, 200, {
-    userId,
+  return send(res, 200, {
+    userId: uid,
     reply,
     reminder: {
       suggestedAction: suggestion.suggestedAction,
       suggestedDestination: suggestion.suggestedDestination,
-      basedOnEvents: suggestion.learnedFromEvents
+      basedOnEvents: suggestion.learnedFromEvents,
+      confidence: local.confidence
     },
-    question: 'Which option feels best right now?',
-    options: [
-      { label: 'Remind me now', value: 'remind_now' },
-      { label: 'Ask me again later', value: 'ask_later' },
-      { label: 'Show my usual destination', value: 'show_destination' },
-      { label: 'I want a quieter suggestion', value: 'gentle_mode' }
-    ],
+    question: local.followUpQuestion,
+    options: local.quickOptions,
+    friendlyCheckIn: checkIn
+      ? {
+          slotKey: checkIn.slotKey,
+          questionId: checkIn.question.id,
+          questionText: checkIn.question.text,
+          options: checkIn.question.options
+        }
+      : null,
     aiMode:
       String(process.env.AI_ENABLED || 'false') === 'true' && process.env.GROQ_API_KEY
         ? 'groq'

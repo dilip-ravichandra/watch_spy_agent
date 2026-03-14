@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Chrono Auth</title>
+<style>
+  :root {
+    --bg:#0a0d14;
+    --panel:#121826;
+    --panel-2:#1a2235;
+    --text:#eef2ff;
+    --muted:#a8b3d1;
+    --gold:#d6b25e;
+    --danger:#ef6b6b;
+    --ok:#6fdfab;
+    --border:rgba(255,255,255,.12);
+    --radius:14px;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0;
+    min-height:100vh;
+    font-family: Inter, Segoe UI, Arial, sans-serif;
+    background: radial-gradient(circle at 20% -10%, rgba(214,178,94,.14), transparent 45%), var(--bg);
+    color:var(--text);
+    display:grid;
+    place-items:center;
+    padding:24px;
+  }
+  .wrap {
+    width:min(460px, 100%);
+    background:linear-gradient(180deg, rgba(255,255,255,.03), transparent), var(--panel);
+    border:1px solid var(--border);
+    border-radius:20px;
+    padding:24px;
+    box-shadow:0 28px 70px rgba(0,0,0,.4);
+  }
+  h1 {
+    margin:0 0 4px;
+    font-size:30px;
+    font-weight:600;
+    letter-spacing:.02em;
+  }
+  .sub { color:var(--muted); font-size:14px; margin-bottom:18px; }
+  .tabs { display:flex; gap:8px; margin-bottom:16px; }
+  .tab {
+    flex:1;
+    border:1px solid var(--border);
+    border-radius:10px;
+    background:var(--panel-2);
+    color:var(--muted);
+    padding:9px 12px;
+    font-weight:600;
+    cursor:pointer;
+  }
+  .tab.active {
+    color:#161107;
+    border-color:transparent;
+    background:linear-gradient(135deg, var(--gold), #b48a3f);
+  }
+  .row { margin-bottom:12px; }
+  label {
+    display:block;
+    margin-bottom:6px;
+    color:var(--muted);
+    font-size:12px;
+    font-weight:600;
+    letter-spacing:.05em;
+    text-transform:uppercase;
+  }
+  input {
+    width:100%;
+    background:#0f1524;
+    border:1px solid var(--border);
+    color:var(--text);
+    border-radius:10px;
+    padding:10px 11px;
+    font-size:14px;
+  }
+  input:focus { outline:none; border-color:var(--gold); }
+  .hidden { display:none; }
+  .btn {
+    width:100%;
+    margin-top:6px;
+    border:none;
+    border-radius:10px;
+    padding:11px 12px;
+    font-weight:700;
+    color:#171208;
+    background:linear-gradient(135deg, var(--gold), #b48a3f);
+    cursor:pointer;
+  }
+  .msg {
+    margin-top:12px;
+    border-radius:10px;
+    padding:10px 11px;
+    font-size:13px;
+    border:1px solid var(--border);
+    background:rgba(255,255,255,.03);
+    color:var(--muted);
+    display:none;
+  }
+  .msg.show { display:block; }
+  .msg.ok { color:var(--ok); border-color:rgba(111,223,171,.35); background:rgba(111,223,171,.08); }
+  .msg.err { color:var(--danger); border-color:rgba(239,107,107,.35); background:rgba(239,107,107,.08); }
+  .footer {
+    margin-top:14px;
+    color:var(--muted);
+    font-size:12px;
+    text-align:center;
+  }
+  .footer a { color:var(--gold); text-decoration:none; }
+  .aux-link {
+    margin-top:8px;
+    display:flex;
+    justify-content:flex-end;
+  }
+  .aux-link button {
+    font-size:12px;
+    color:var(--gold);
+    background:none;
+    border:none;
+    cursor:pointer;
+    padding:0;
+  }
+  .modal-overlay {
+    position:fixed;
+    inset:0;
+    background:rgba(0,0,0,.55);
+    display:none;
+    align-items:center;
+    justify-content:center;
+    padding:18px;
+    z-index:30;
+  }
+  .modal-overlay.open { display:flex; }
+  .modal {
+    width:min(420px,100%);
+    background:var(--panel);
+    border:1px solid var(--border);
+    border-radius:16px;
+    padding:18px;
+  }
+  .modal h2 {
+    margin:0 0 6px;
+    font-size:20px;
+  }
+  .modal .subtxt {
+    color:var(--muted);
+    font-size:13px;
+    margin-bottom:12px;
+  }
+  .modal .actions {
+    display:flex;
+    gap:8px;
+    margin-top:6px;
+  }
+  .modal .actions .btn {
+    margin-top:0;
+    width:auto;
+    flex:1;
+  }
+  .btn-secondary {
+    background:#202a3f;
+    color:#dce4ff;
+    border:1px solid var(--border);
+  }
+</style>
+</head>
+<body>
+  <main class="wrap">
+    <h1>Chrono</h1>
+    <div class="sub">Secure login and signup with MongoDB storage.</div>
+
+    <div class="tabs">
+      <button class="tab active" id="tab-login" onclick="setMode('login')">Login</button>
+      <button class="tab" id="tab-signup" onclick="setMode('signup')">Signup</button>
+    </div>
+
+    <form id="auth-form" onsubmit="submitAuth(event)">
+      <div class="row hidden" id="row-fullname">
+        <label for="fullName">Full Name</label>
+        <input id="fullName" type="text" maxlength="60" placeholder="Alex Mercer" />
+      </div>
+
+      <div class="row hidden" id="row-userid">
+        <label for="userId">User ID</label>
+        <input id="userId" type="text" maxlength="32" placeholder="collector_42" />
+      </div>
+
+      <div class="row">
+        <label for="email">Email</label>
+        <input id="email" type="email" required placeholder="you@example.com" />
+      </div>
+
+      <div class="row">
+        <label for="password">Password</label>
+        <input id="password" type="password" required minlength="8" placeholder="Minimum 8 characters" />
+      </div>
+      <div class="aux-link" id="forgot-wrap">
+        <button type="button" onclick="openForgotModal()">Forgot password?</button>
+      </div>
+
+      <div class="row hidden" id="row-confirm">
+        <label for="confirmPassword">Confirm Password</label>
+        <input id="confirmPassword" type="password" minlength="8" placeholder="Repeat password" />
+      </div>
+
+      <button class="btn" id="submit-btn" type="submit">Login</button>
+    </form>
+
+    <div id="message" class="msg" role="status" aria-live="polite"></div>
+    <div class="footer">After login you will be redirected to <a href="/index.html">the app</a>.</div>
+  </main>
+
+  <div class="modal-overlay" id="reset-modal" onclick="onModalOverlayClick(event)">
+    <div class="modal">
+      <h2 id="reset-title">Forgot Password</h2>
+      <div class="subtxt" id="reset-subtitle">Enter your email to receive a password reset link.</div>
+
+      <div class="row" id="reset-email-row">
+        <label for="reset-email">Email</label>
+        <input id="reset-email" type="email" placeholder="you@example.com" />
+      </div>
+
+      <div class="row hidden" id="reset-token-row">
+        <label for="reset-token">Reset Token</label>
+        <input id="reset-token" type="text" placeholder="Reset token" />
+      </div>
+
+      <div class="row hidden" id="reset-password-row">
+        <label for="reset-new-password">New Password</label>
+        <input id="reset-new-password" type="password" minlength="8" placeholder="New password" />
+      </div>
+
+      <div class="row hidden" id="reset-confirm-row">
+        <label for="reset-confirm-password">Confirm New Password</label>
+        <input id="reset-confirm-password" type="password" minlength="8" placeholder="Confirm new password" />
+      </div>
+
+      <div id="reset-message" class="msg" role="status" aria-live="polite"></div>
+
+      <div class="actions">
+        <button class="btn btn-secondary" type="button" onclick="closeResetModal()">Cancel</button>
+        <button class="btn" id="reset-submit-btn" type="button" onclick="submitResetFlow()">Send Link</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+  let mode = 'login';
+  let csrfToken = '';
+  let resetMode = 'request';
+
+  async function ensureCsrfToken() {
+    if (csrfToken) return csrfToken;
+    const res = await fetch('/api/auth/csrf');
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.csrfToken) throw new Error(data.error || 'Could not get CSRF token');
+    csrfToken = data.csrfToken;
+    return csrfToken;
+  }
+
+  function setMode(nextMode) {
+    mode = nextMode;
+    const signup = mode === 'signup';
+
+    document.getElementById('tab-login').classList.toggle('active', !signup);
+    document.getElementById('tab-signup').classList.toggle('active', signup);
+
+    document.getElementById('row-fullname').classList.toggle('hidden', !signup);
+    document.getElementById('row-userid').classList.toggle('hidden', !signup);
+    document.getElementById('row-confirm').classList.toggle('hidden', !signup);
+    document.getElementById('forgot-wrap').classList.toggle('hidden', signup);
+
+    document.getElementById('submit-btn').textContent = signup ? 'Create Account' : 'Login';
+    showMsg('');
+  }
+
+  function showResetMsg(text, type) {
+    const box = document.getElementById('reset-message');
+    if (!text) {
+      box.className = 'msg';
+      box.textContent = '';
+      return;
+    }
+    box.className = `msg show ${type || ''}`;
+    box.textContent = text;
+  }
+
+  function setResetMode(nextMode, preset = {}) {
+    resetMode = nextMode;
+    const requestMode = resetMode === 'request';
+    document.getElementById('reset-title').textContent = requestMode ? 'Forgot Password' : 'Reset Password';
+    document.getElementById('reset-subtitle').textContent = requestMode
+      ? 'Enter your email to receive a password reset link.'
+      : 'Set a new password for your account.';
+
+    document.getElementById('reset-token-row').classList.toggle('hidden', requestMode);
+    document.getElementById('reset-password-row').classList.toggle('hidden', requestMode);
+    document.getElementById('reset-confirm-row').classList.toggle('hidden', requestMode);
+    document.getElementById('reset-submit-btn').textContent = requestMode ? 'Send Link' : 'Change Password';
+
+    if (preset.email) document.getElementById('reset-email').value = preset.email;
+    if (preset.token) document.getElementById('reset-token').value = preset.token;
+    showResetMsg('');
+  }
+
+  function openForgotModal() {
+    setResetMode('request', { email: document.getElementById('email').value.trim() });
+    document.getElementById('reset-modal').classList.add('open');
+  }
+
+  function openResetFromLink(token, email) {
+    setMode('login');
+    setResetMode('reset', { token, email });
+    document.getElementById('reset-modal').classList.add('open');
+  }
+
+  function closeResetModal() {
+    document.getElementById('reset-modal').classList.remove('open');
+  }
+
+  function onModalOverlayClick(e) {
+    if (e.target === e.currentTarget) closeResetModal();
+  }
+
+  function resetLinkParams() {
+    const p = new URLSearchParams(window.location.search || '');
+    const modeParam = p.get('mode');
+    const token = p.get('token');
+    const email = p.get('email');
+    if (modeParam === 'reset' && token && email) return { token, email };
+    return null;
+  }
+
+  function clearResetQueryParams() {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('mode');
+    url.searchParams.delete('token');
+    url.searchParams.delete('email');
+    window.history.replaceState({}, '', url.toString());
+  }
+
+  async function submitResetFlow() {
+    const submitBtn = document.getElementById('reset-submit-btn');
+    const email = document.getElementById('reset-email').value.trim();
+    if (!email) return showResetMsg('Email is required', 'err');
+
+    submitBtn.disabled = true;
+    showResetMsg('Please wait...');
+
+    try {
+      const token = await ensureCsrfToken();
+
+      if (resetMode === 'request') {
+        const res = await fetch('/api/auth/forgot-password-request', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': token
+          },
+          body: JSON.stringify({ email })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        showResetMsg('If your account exists, reset email has been sent.', 'ok');
+        if (data.devResetLink) {
+          showResetMsg(`Dev link: ${data.devResetLink}`, 'ok');
+        }
+        return;
+      }
+
+      const resetToken = document.getElementById('reset-token').value.trim();
+      const newPassword = document.getElementById('reset-new-password').value;
+      const confirmPassword = document.getElementById('reset-confirm-password').value;
+
+      if (!resetToken) return showResetMsg('Reset token is missing', 'err');
+      if (newPassword.length < 8) return showResetMsg('Password must be at least 8 characters', 'err');
+      if (newPassword !== confirmPassword) return showResetMsg('Passwords do not match', 'err');
+
+      const res = await fetch('/api/auth/reset-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': token
+        },
+        body: JSON.stringify({ email, token: resetToken, newPassword })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+      showMsg('Password changed. Please login now.', 'ok');
+      closeResetModal();
+      clearResetQueryParams();
+    } catch (error) {
+      showResetMsg(error.message || 'Reset failed', 'err');
+    } finally {
+      submitBtn.disabled = false;
+    }
+  }
+
+  function showMsg(text, type) {
+    const box = document.getElementById('message');
+    if (!text) {
+      box.className = 'msg';
+      box.textContent = '';
+      return;
+    }
+    box.className = `msg show ${type || ''}`;
+    box.textContent = text;
+  }
+
+  async function maybeAutoRedirect() {
+    try {
+      await ensureCsrfToken();
+      const resetData = resetLinkParams();
+      if (resetData) {
+        openResetFromLink(resetData.token, resetData.email);
+        return;
+      }
+      const res = await fetch('/api/auth/me');
+      if (res.ok) {
+        showMsg('You are already logged in. Redirecting to home…', 'ok');
+        setTimeout(() => window.location.replace('/index.html'), 1500);
+      }
+    } catch (_) {}
+  }
+
+  async function submitAuth(e) {
+    e.preventDefault();
+
+    const email = document.getElementById('email').value.trim();
+    const password = document.getElementById('password').value;
+    const submitBtn = document.getElementById('submit-btn');
+
+    let endpoint = '/api/auth/login';
+    let body = { email, password };
+
+    if (mode === 'signup') {
+      const fullName = document.getElementById('fullName').value.trim();
+      const userId = document.getElementById('userId').value.trim();
+      const confirmPassword = document.getElementById('confirmPassword').value;
+
+      if (!userId) return showMsg('User ID is required for signup', 'err');
+      if (password !== confirmPassword) return showMsg('Passwords do not match', 'err');
+
+      endpoint = '/api/auth/signup';
+      body = { fullName, userId, email, password };
+    }
+
+    submitBtn.disabled = true;
+    showMsg('Please wait...');
+
+    try {
+      const token = await ensureCsrfToken();
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': token
+        },
+        body: JSON.stringify(body)
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || data.message || `HTTP ${res.status}`);
+
+      showMsg('Success. Redirecting...', 'ok');
+      setTimeout(() => window.location.replace('/index.html'), 1500);
+    } catch (error) {
+      showMsg(error.message || 'Authentication failed', 'err');
+    } finally {
+      submitBtn.disabled = false;
+    }
+  }
+
+  maybeAutoRedirect();
+</script>
+</body>
+</html>

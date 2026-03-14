@@ -1,4 +1,4 @@
-const { sql, ensureSchema } = require('../_lib/db');
+const { getDb, ensureSchema } = require('../_lib/db');
 const { nowIso, rankBy, safeHour, json } = require('../_lib/utils');
 
 function checkCronAuth(req) {
@@ -15,14 +15,16 @@ module.exports = async (req, res) => {
   if (!checkCronAuth(req)) return json(res, 401, { error: 'Unauthorized' });
 
   await ensureSchema();
+  const db = await getDb();
+  if (!db) return json(res, 500, { error: 'MongoDB is not configured' });
 
   const notificationsEnabled = String(process.env.NOTIFICATIONS_DISPATCH_ENABLED || 'false') === 'true';
 
-  const users = await sql`
-    SELECT DISTINCT user_id
-    FROM device_hooks
-    WHERE enabled = TRUE
-  `;
+  const hookUsers = await db
+    .collection('device_hooks')
+    .find({ enabled: true }, { projection: { userId: 1 } })
+    .toArray();
+  const userIds = [...new Set(hookUsers.map((h) => String(h.userId || '')).filter(Boolean))];
 
   const reminderSlot = nowIso().slice(0, 13); // YYYY-MM-DDTHH
   const currentHour = safeHour(nowIso());
@@ -30,30 +32,34 @@ module.exports = async (req, res) => {
   let queued = 0;
   let delivered = 0;
 
-  for (const u of users.rows) {
-    const userId = u.user_id;
+  for (const userId of userIds) {
 
     const [events, hooks] = await Promise.all([
-      sql`
-        SELECT timestamp_iso, location, destination, action
-        FROM habit_events
-        WHERE user_id = ${userId}
-          AND hour_of_day = ${currentHour}
-        ORDER BY id DESC
-        LIMIT 100
-      `,
-      sql`
-        SELECT device_type, platform, hook_url, push_token, enabled
-        FROM device_hooks
-        WHERE user_id = ${userId}
-          AND enabled = TRUE
-      `
+      db
+        .collection('events')
+        .find({ userId })
+        .sort({ _id: -1 })
+        .limit(500)
+        .toArray(),
+      db
+        .collection('device_hooks')
+        .find({ userId, enabled: true })
+        .toArray()
     ]);
 
-    if (!events.rows.length || !hooks.rows.length) continue;
+    const hourlyEvents = (events || [])
+      .filter((e) => safeHour(e.timestampIso || e.timestamp || e.timestamp_iso) === currentHour)
+      .slice(0, 100)
+      .map((e) => ({
+        location: e.location,
+        destination: e.destination,
+        action: e.action
+      }));
 
-    const actions = rankBy(events.rows, 'action', 'check your plan');
-    const destinations = rankBy(events.rows, 'destination', 'unknown');
+    if (!hourlyEvents.length || !hooks.length) continue;
+
+    const actions = rankBy(hourlyEvents, 'action', 'check your plan');
+    const destinations = rankBy(hourlyEvents, 'destination', 'unknown');
     const suggestedAction = actions[0]?.name || 'check your plan';
     const suggestedDestination = destinations[0]?.name || 'unknown';
 
@@ -62,19 +68,17 @@ module.exports = async (req, res) => {
         ? `Hi, this is your gentle reminder. Around this time you usually ${suggestedAction} and often head to ${suggestedDestination}.`
         : `Hi, this is your gentle reminder. Around this time you usually ${suggestedAction}.`;
 
-    for (const hook of hooks.rows) {
-      const deviceType = hook.device_type || 'mobile';
+    for (const hook of hooks) {
+      const deviceType = hook.deviceType || 'mobile';
 
-      const exists = await sql`
-        SELECT COUNT(*)::int AS total_count
-        FROM notification_queue
-        WHERE user_id = ${userId}
-          AND device_type = ${deviceType}
-          AND reminder_slot = ${reminderSlot}
-          AND status IN ('PENDING', 'SENT', 'DELIVERED')
-      `;
+      const existsCount = await db.collection('notification_queue').countDocuments({
+        userId,
+        deviceType,
+        reminderSlot,
+        status: { $in: ['PENDING', 'SENT', 'DELIVERED'] }
+      });
 
-      if ((exists.rows[0]?.total_count || 0) > 0) continue;
+      if (existsCount > 0) continue;
 
       const payload = {
         type: 'habit-reminder',
@@ -91,57 +95,50 @@ module.exports = async (req, res) => {
         scheduledTime: nowIso()
       };
 
-      const inserted = await sql`
-        INSERT INTO notification_queue (user_id, device_type, channel, reminder_slot, scheduled_time, suggested_action, suggested_destination, reminder_message, delivery_payload, status, response_option, created_at, sent_at)
-        VALUES (
-          ${userId},
-          ${deviceType},
-          ${(hook.hook_url || '').length ? 'webhook' : 'inbox'},
-          ${reminderSlot},
-          ${nowIso()},
-          ${suggestedAction},
-          ${suggestedDestination},
-          ${reminderMessage},
-          ${JSON.stringify(payload)},
-          ${'PENDING'},
-          ${null},
-          ${nowIso()},
-          ${null}
-        )
-        RETURNING id
-      `;
+      const inserted = await db.collection('notification_queue').insertOne({
+        userId,
+        deviceType,
+        channel: (hook.hookUrl || '').length ? 'webhook' : 'inbox',
+        reminderSlot,
+        scheduledTime: nowIso(),
+        suggestedAction,
+        suggestedDestination,
+        reminderMessage,
+        deliveryPayload: payload,
+        status: 'PENDING',
+        responseOption: null,
+        createdAt: nowIso(),
+        sentAt: null
+      });
 
       queued += 1;
-      const notificationId = inserted.rows[0]?.id;
+      const notificationId = inserted.insertedId;
 
-      if (notificationsEnabled && hook.hook_url) {
+      if (notificationsEnabled && hook.hookUrl) {
         try {
-          const resp = await fetch(String(hook.hook_url), {
+          const resp = await fetch(String(hook.hookUrl), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ...payload, notificationId })
+            body: JSON.stringify({ ...payload, notificationId: String(notificationId) })
           });
 
           if (resp.ok) {
             delivered += 1;
-            await sql`
-              UPDATE notification_queue
-              SET status = 'DELIVERED', sent_at = ${nowIso()}
-              WHERE id = ${notificationId}
-            `;
+            await db.collection('notification_queue').updateOne(
+              { _id: notificationId },
+              { $set: { status: 'DELIVERED', sentAt: nowIso() } }
+            );
           } else {
-            await sql`
-              UPDATE notification_queue
-              SET status = 'FAILED', sent_at = ${nowIso()}
-              WHERE id = ${notificationId}
-            `;
+            await db.collection('notification_queue').updateOne(
+              { _id: notificationId },
+              { $set: { status: 'FAILED', sentAt: nowIso() } }
+            );
           }
         } catch {
-          await sql`
-            UPDATE notification_queue
-            SET status = 'FAILED', sent_at = ${nowIso()}
-            WHERE id = ${notificationId}
-          `;
+          await db.collection('notification_queue').updateOne(
+            { _id: notificationId },
+            { $set: { status: 'FAILED', sentAt: nowIso() } }
+          );
         }
       }
     }
@@ -149,7 +146,7 @@ module.exports = async (req, res) => {
 
   return json(res, 200, {
     ok: true,
-    usersScanned: users.rows.length,
+    usersScanned: userIds.length,
     queued,
     delivered,
     dispatchEnabled: notificationsEnabled,

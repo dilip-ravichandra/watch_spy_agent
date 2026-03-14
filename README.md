@@ -2,6 +2,10 @@
 
 A polished full-stack assistant for watch enthusiasts with secure auth, habit intelligence, chatbot support, location-aware insights, calendar planning, and MongoDB persistence.
 
+## 🌐 Live App
+
+- Production URL: https://chrono-watch-assistant.onrender.com
+
 ---
 
 ## ✨ Highlights
